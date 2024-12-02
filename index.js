@@ -1,15 +1,11 @@
 import fetch from 'node-fetch';
-import { Client, GatewayIntentBits, Collection } from 'discord.js';
+import { Client, GatewayIntentBits } from 'discord.js';
 import dotenv from 'dotenv';
 import express from 'express'; // Import express for web server
-import { printWatermark } from './src/watermark.js'; // Import the watermark function
 import { createUrlEmbed } from './src/embedMessage.js'; // Import the embed creation function
 import pingCommand from './src/pingCommand.js'; // Import the ping command
 
 dotenv.config();
-
-// Example usage of the printWatermark function
-printWatermark(process.env.API_TOKEN);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const SHORTEN_CHANNEL_ID = process.env.SHORTEN_CHANNEL_ID; // Channel ID where the bot listens for messages to shorten
@@ -24,6 +20,49 @@ app.get('/', (req, res) => res.send('Bot is running'));
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+
+// Function to extract file name dynamically
+async function getFileNameFromUrl(url) {
+    try {
+        // Send a HEAD request to the URL to retrieve the headers
+        const response = await fetch(url, { method: 'HEAD' });
+        if (!response.ok) throw new Error(`Failed to fetch metadata: ${response.statusText}`);
+
+        // Check Content-Disposition header for the filename
+        const contentDisposition = response.headers.get('content-disposition');
+        if (contentDisposition && contentDisposition.includes('filename=')) {
+            const fileNameMatch = contentDisposition.match(/filename="(.+)"/);
+            if (fileNameMatch) return fileNameMatch[1];
+        }
+
+        // Fallback: Try to extract the filename from the URL path
+        const urlObj = new URL(url);
+        const pathParts = urlObj.pathname.split('/');
+        return pathParts[pathParts.length - 1]; // Last part of the path
+    } catch (error) {
+        console.error('Error extracting filename:', error);
+        return null;
+    }
+}
+
+// Shorten URL with GPlinks and set alias
+async function shortenWithGPlinks(url, apiToken) {
+    const fileName = await getFileNameFromUrl(url);
+    const alias = fileName ? encodeURIComponent(fileName.replace(/\s+/g, '_')) : 'CustomAlias';
+
+    const apiUrl = `https://api.gplinks.com/api?api=${apiToken}&url=${encodeURIComponent(url)}&alias=${alias}`;
+    try {
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+        if (data.status === 'error') {
+            console.error('Error shortening URL:', data.message);
+        } else {
+            console.log('Shortened URL:', data.shortenedUrl);
+        }
+    } catch (error) {
+        console.error('Error calling GPlinks API:', error);
+    }
+}
 
 client.once('ready', () => {
     console.log('Bot is online');
@@ -63,23 +102,16 @@ client.on('messageCreate', async (message) => {
         if (urls) {
             for (const url of urls) {
                 try {
-                    // Shorten the URL with VN Shortener
-                    const apiUrl = `https://vnshortener.com/api?api=${process.env.API_TOKEN}&url=${encodeURIComponent(url)}&format=text`;
-                    const response = await fetch(apiUrl);
-                    if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-
-                    const responseText = await response.text();
-                    const shortUrl = responseText.trim();
-                    if (!shortUrl.startsWith('http')) {
-                        throw new Error('Shortened URL is invalid or not received correctly.');
-                    }
+                    // Shorten the URL with GPlinks
+                    const apiToken = process.env.API_TOKEN; // Your GPlinks API token
+                    await shortenWithGPlinks(url, apiToken);
 
                     // Extract domain from the original URL
                     const urlObj = new URL(url);
                     const domain = urlObj.hostname;
 
                     // Create and send an embed message with the original long URL, shortened URL, and the source
-                    const embed = createUrlEmbed(url, shortUrl, domain);
+                    const embed = createUrlEmbed(url, `https://gplinks.com/shortened-url-here`, domain); // Update with actual shortened URL
                     await message.reply({ embeds: [embed] });
 
                 } catch (error) {
